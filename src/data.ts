@@ -485,7 +485,13 @@ export const procFor = (pay: string) => (pay === 'ach' ? PROC_ACH : PROC_CARD);/
 //
 // It matters most on long travel: a $120 journey was commissioned $1.00 and is now $1.20.
 // backend/payments.js carries the same change — the two must never disagree.
-export const coordinationFee = (cost: number) => Math.floor(0.01 * cost * 100) / 100;
+// Convert the Fare to integer cents before applying 1%: float-first math incorrectly
+// gave 28c instead of 29c commission on a $29 Fare (and other exact-dollar fares).
+// The server remains authoritative and uses floor(fareCents * 0.01).
+export const coordinationFee = (cost: number) => {
+  const fareCents = Math.max(0, Math.round(cost * 100));
+  return Math.floor(fareCents / 100) / 100;
+};
 
 // Payment method names in the demo's exact lettering.
 // THE INVENTED ACCOUNT NUMBERS ARE GONE — 17 Aug 2026. These read

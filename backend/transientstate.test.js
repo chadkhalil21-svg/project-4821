@@ -49,7 +49,8 @@ const commissioned = read('app/operator/commissioned.tsx');
 assert.match(commissioned, /if \(!op\.ready \|\| op\.verification !== 'commissioned'\)/,
   'the commissioned title is unreachable until server qualification resolves');
 const economics = read('app/operator/economics.tsx');
-assert.match(economics, /EXAMPLE_FARES = \[1000, 5000\]/);
+assert.match(economics, /EXAMPLE_FARES = \[20, 50\]/, 'individual Travel examples are realistic arithmetic, not forecasts');
+assert.match(economics, /operator\.econAccountCostNote/, 'Operator sees separate account charges before setup');
 assert.match(economics, /const commission = coordinationFee\(example\)/);
 assert.match(economics, /const retained = fare == null \? null : fare - coordinationFee\(fare\)/);
 assert.match(economics, /operator\.econRetainedIllustration/);
