@@ -1293,69 +1293,33 @@ app.post('/operator/offline', requireAuth, async (req, res) => {
 // The operator asks for their own money, which is the right party to be driving this. Scoped
 // to travels dispatched to the caller; it can pay nobody else and can be called as often as
 // the app likes, because each transfer is still guarded by the travel's own transferId.
+// Read-only, bounded reconciliation inquiry. Legacy payout records MUST be
+// reconciled against Stripe before any new transfer; the periodic settlement
+// sweep separately handles newly completed, ledger-versioned Travels.
+// This endpoint must never trigger N transfers merely by opening an app.
 app.post('/operator/settle-pending', requireAuth, async (req, res) => {
-  if (keyMode === 'no-key') return res.status(500).json({ error: 'No Stripe key configured' });
   const db = adminDb();
-  if (!db) return res.status(503).json({ error: adminStatus().reason, code: 'no_admin_db' });
-
+  if (!db) return res.status(503).json({ ok: false, code: 'no_admin_db' });
   try {
     const uid = String(req.uid);
-    const { accountId } = await operatorPayoutAccount(db, uid);
-    if (!accountId) {
-      return res.json({ ok: false, code: 'not_payable', settled: 0, reason: 'no payout account' });
-    }
-
-    const snap = await db.collection('rides').where('operatorId', '==', uid).get();
-    const owed = [];
-    snap.forEach((d) => {
-      const x = d.data() || {};
-      if (x.status === 'completed' && !x.transferId && x.paymentIntentId) {
-        owed.push({ rideId: d.id, ...x });
-      }
+    const { censusOperatorPage } = require('./payout-recovery-census');
+    const page = await censusOperatorPage({ db, operatorId: uid, pageSize: 100 });
+    const unclear = page.hasMore || page.requiresStripeReconciliation;
+    return res.status(unclear ? 503 : 200).json({
+      ok: !unclear,
+      settled: 0, centsPaid: 0,
+      // Do not expose another Operator's identifiers or falsely state old debt
+      // has been paid. A page needing reconciliation is an unconfirmed state.
+      stillOwed: page.candidates.map(x => ({ rideId: x.rideId, reason: x.status })),
+      code: unclear ? 'payout_reconciliation_required' : 'payout_records_checked',
+      hasMore: page.hasMore,
+      readOnly: true,
     });
-
-    let settled = 0;
-    let centsPaid = 0;
-    const stillOwed = [];
-    for (const ride of owed) {
-      const out = await transferToOperator({
-        paymentIntentId: ride.paymentIntentId,
-        operatorStripeAccount: accountId,
-        // The payment belongs to the TRAVELER; that is whose uid is stamped on the intent.
-        expectedUid: String(ride.travelerUid),
-        expectedTripNo: ride.tripNo || null,
-        rideId: ride.rideId,
-      });
-      if (out.ok) {
-        settled += 1;
-        centsPaid += out.amountCents;
-        await db.collection('rides').doc(ride.rideId).set(
-          {
-            transferId: out.transferId,
-            operatorPaidCents: out.amountCents,
-            payoutPending: false,
-            payoutBlockedReason: null,
-            settledAt: Date.now(),
-            ...(out.paidWith ? { paidWith: out.paidWith } : {}),
-          },
-          { merge: true },
-        );
-      } else {
-        stillOwed.push({ tripNo: ride.tripNo || null, reason: out.error || out.code });
-        await db.collection('rides').doc(ride.rideId).set(
-          {
-            payoutPending: true,
-            payoutBlockedReason: out.error || out.code,
-            payoutCheckedAt: Date.now(),
-            ...(out.paidWith ? { paidWith: out.paidWith } : {}),
-          },
-          { merge: true },
-        );
-      }
-    }
-    res.json({ ok: true, settled, centsPaid, stillOwed });
-  } catch (e) {
-    res.status(502).json({ error: e.message });
+  } catch {
+    return res.status(503).json({
+      ok: false, code: 'payout_reconciliation_unavailable',
+      error: 'Operator payment records could not be verified.',
+    });
   }
 });
 

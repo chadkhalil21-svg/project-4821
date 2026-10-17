@@ -277,7 +277,9 @@ async function settleTravel({ db, uid, rideId, deps, now = Date.now() }) {
   });
   if (!out.ok) {
     await rideRef.set(
-      { payoutPending: true, payoutBlockedReason: out.error || out.code, payoutCheckedAt: now, ...(out.paidWith ? { paidWith: out.paidWith } : {}) },
+      { payoutPending: true, payoutBlockedReason: out.error || out.code, payoutCheckedAt: now,
+        ...(out.unconfirmed ? { needsPayout: false, payoutReconciliationNeeded: true } : {}),
+        ...(out.paidWith ? { paidWith: out.paidWith } : {}) },
       { merge: true },
     );
     return { status: out.retryable ? 202 : 502, body: out };

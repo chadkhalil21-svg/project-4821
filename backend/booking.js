@@ -58,6 +58,9 @@ async function prepareBooking({ db, uid, key, fingerprint, record, now = Date.no
       ...record,
       travelerUid: String(uid),
       bookingFingerprint: fingerprint,
+      // Only newly created Travels may initiate the durable guarded transfer path.
+      // Legacy history must first be checked against Stripe, never silently re-keyed.
+      payoutLedgerVersion: 1,
       status: 'awaiting_payment',
       createdAt: now,
       statusAt: now,

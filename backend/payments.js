@@ -873,38 +873,28 @@ async function transferToOperator({
     platformTake: Math.max(0, Number(pi.metadata?.platformTake || 0)),
   };
 
-  try {
-    const transfer = await stripe.transfers.create(
-      {
-        amount: q.operatorGets, // 99% of the fare — the commission and the platform fee stay behind
-        currency: 'usd',
-        destination: operatorStripeAccount,
-        source_transaction: chargeId, // waits for THESE funds, so a failed ACH pays nobody
-        description: `American Rider travel ${expectedTripNo || ''}`.trim(),
-        metadata: {
-          tripNo: expectedTripNo || '',
-          rideId: rideId || '',
-          paymentIntentId: pi.id,
-          travelCostCents: String(travelCostCents),
-        },
+  // One durable attempt per new Travel. If the process crashes after Stripe
+  // executes but before Firestore confirms, subsequent requests reconcile,
+  // never issue another payout based only on a possibly-expired idempotency key.
+  const { adminDb } = require('./firebase-admin');
+  const { transferOnce } = require('./payout-transfer-guard');
+  return transferOnce({
+    db: adminDb(), rideId, paymentIntentId: pi.id, expectedUid,
+    operatorStripeAccount, chargeId, amountCents: q.operatorGets,
+    platformTake: q.platformTake, paidWith,
+    findTransfers: (group) => stripe.transfers.list({ transfer_group: group, limit: 2 }),
+    createTransfer: (group) => stripe.transfers.create({
+      amount: q.operatorGets, currency: 'usd',
+      destination: operatorStripeAccount,
+      source_transaction: chargeId,
+      transfer_group: group,
+      description: `American Rider travel ${expectedTripNo || ''}`.trim(),
+      metadata: {
+        tripNo: expectedTripNo || '', rideId,
+        paymentIntentId: pi.id, travelCostCents: String(travelCostCents),
       },
-      // One transfer per travel, even if settle is called twice in the same moment. The ride
-      // document carries the durable guard; this closes the seconds-wide race between two taps.
-      { idempotencyKey: `ar_transfer_${rideId || pi.id}` },
-    );
-    return {
-      ok: true,
-      transferId: transfer.id,
-      amountCents: transfer.amount,
-      operatorGets: q.operatorGets,
-      platformTake: q.platformTake,
-      paidWith,
-    };
-  } catch (e) {
-    // Insufficient available balance is the ordinary case while a payment is still clearing.
-    const retryable = e.code === 'balance_insufficient';
-    return { ok: false, code: e.code || 'transfer_failed', error: e.message, retryable, paidWith };
-  }
+    }, { idempotencyKey: `ar_transfer_${rideId}` }),
+  });
 }
 
 /**

@@ -616,7 +616,13 @@ async function sweepSettlements({ now = Date.now(), limit = 25 } = {}) {
       } else {
         blocked.push({ tripNo: ride.tripNo || ride.rideId, reason: out.error || out.code });
         await db.collection('rides').doc(ride.rideId).set(
-          { payoutPending: true, payoutBlockedReason: out.error || out.code, payoutCheckedAt: now },
+          { payoutPending: true, payoutBlockedReason: out.error || out.code,
+            payoutCheckedAt: now,
+            // A provider-ambiguous or legacy payout must not be re-attempted
+            // every minute. Human reconciliation remains visible through
+            // payoutPending and the historical ledger census.
+            ...(out.unconfirmed ? { needsPayout: false, payoutReconciliationNeeded: true } : {}),
+          },
           { merge: true },
         );
       }
