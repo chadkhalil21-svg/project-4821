@@ -14,6 +14,7 @@ import {
   onSnapshot,
   query,
   where,
+  limit,
 } from 'firebase/firestore';
 import { fareFromTotal } from '../data';
 import { PAYMENT_SERVER_URL } from '../config';
@@ -105,10 +106,22 @@ export function watchAssignedTravel(
     return () => {};
   }
   try {
-    const q = query(collection(db, 'rides'), where('operatorId', '==', uid));
+    // Historic completed/cancelled Travels belong to paginated history, not the
+    // real-time assignment inbox. Fetch only active work, with an explicit ceiling.
+    // A saturated inbox is an operational exception, never silently truncated.
+    const MAX_ACTIVE_INBOX = 100;
+    const q = query(collection(db, 'rides'),
+      where('operatorId', '==', uid),
+      where('status', 'in', ['assigned', 'accepted', 'arrived', 'onboard']),
+      limit(MAX_ACTIVE_INBOX + 1));
     return onSnapshot(
       q,
       (snap) => {
+        if (snap.docs.length > MAX_ACTIVE_INBOX) {
+          onChange([]);
+          onError?.(t('traveler.errReadTravel'));
+          return;
+        }
         const open = snap.docs
           .map((d) => {
             const x = d.data() as Record<string, unknown>;

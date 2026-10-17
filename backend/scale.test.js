@@ -55,18 +55,17 @@ check('1M Travel economics invariant',econBad===0,((performance.now()-et)/1000).
 
 // Candidate reads are bounded by two tiers x nine prefixes x a 120-document saturated-cell ceiling. Fleet growth from
 // 1K to 1M Operators does not change this architectural ceiling.
-// Each saturated prefix is fetched TWICE: first 40 documents, then 120.
-// Billing includes both queries. The previous 2,160 figure covered only the
-// second pages and understated worst-case billable reads by one third.
+// Each saturated prefix uses NONOVERLAPPING pages: first 40, then the next 80.
+// The earlier repeated 120-document query charged for the first 40 twice.
 const maxCandidateDocs=2*9*120;
-const maxBilledCandidateReads=2*9*(40+120);
-check('saturated geographic scans account for both billed query pages',
-  maxBilledCandidateReads===2880,
+const maxBilledCandidateReads=2*9*(40+80);
+check('saturated geographic scans bill nonoverlapping query pages',
+  maxBilledCandidateReads===2160,
   maxBilledCandidateReads+' document reads per saturated search before other work');
 const conservativeFreeTierTrips=Math.floor(Math.min(
   50000/(2*maxBilledCandidateReads), 20000/40));
-check('two saturated searches can exhaust free reads before 9 bookings',
-  conservativeFreeTierTrips===8,
+check('two saturated searches can exhaust free reads before 12 bookings',
+  conservativeFreeTierTrips===11,
   conservativeFreeTierTrips+' hypothetical Travels/day at zero idle reads/writes; NOT measured capacity');
 for(const [ops,travels] of [[1000,10000],[10000,100000],[50000,1000000],[1000000,1000000]]){
  const upper=BigInt(maxCandidateDocs)*BigInt(travels);

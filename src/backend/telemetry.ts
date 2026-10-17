@@ -16,12 +16,13 @@
 import * as Location from 'expo-location';
 import { doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { MOVEMENT_RADIUS_MI, shouldPublishTripPosition } from '../tripPositionPolicy';
 
 /** Movement below this is GPS drift at a standstill, not a car going anywhere. */
-const STILL_RADIUS_MI = 0.03;
+const STILL_RADIUS_MI = MOVEMENT_RADIUS_MI;
 
-/** How often a position reaches the travel. Fifteen seconds of a six-minute threshold. */
-const REPORT_EVERY_MS = 15000;
+/** Sample locally every 15 seconds; publish less often without losing stop detection. */
+const SAMPLE_EVERY_MS = 15_000;
 
 function distanceMiles(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
   const R = 3958.8;
@@ -55,18 +56,21 @@ export function reportPosition(rideId: string): () => void {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted' || stop) return;
       sub = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.Balanced, timeInterval: REPORT_EVERY_MS, distanceInterval: 10 },
+        { accuracy: Location.Accuracy.Balanced, timeInterval: SAMPLE_EVERY_MS, distanceInterval: 10 },
         (pos) => {
           if (stop) return;
           const here = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          if (!last || distanceMiles(last, here) > STILL_RADIUS_MI) {
-            stillSince = Date.now();
+          const now = Date.now();
+          const moved = !last || distanceMiles(last, here) > STILL_RADIUS_MI;
+          if (moved) {
+            stillSince = now;
             last = here;
           }
-          // Throttled: watchPositionAsync can fire far more often than this, and a Firestore
-          // write per fix would be a write every second on a moving car.
-          const now = Date.now();
-          if (now - sentAt < REPORT_EVERY_MS) return;
+          // Local GPS remains automatic. Moving updates are capped at 30 seconds;
+          // stationary freshness at 60 seconds. Do not silence an initial fix.
+          if (!shouldPublishTripPosition({
+            elapsedMs: now - sentAt, moved, hasPublished: sentAt > 0,
+          })) return;
           sentAt = now;
           updateDoc(doc(db, 'rides', rideId), {
             opLat: here.lat,

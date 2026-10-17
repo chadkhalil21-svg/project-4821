@@ -21,10 +21,18 @@ assert.ok(!mon.includes("collection('operators').get()"));
   const rows=await G.nearbyOperatorCandidates(db,{lat:25.7617,lng:-80.1918});
   assert.ok(rows.some(x=>x.id==='inner-ineligible')&&rows.some(x=>x.id==='outer-eligible'),'candidate retrieval widens even when the inner tier is non-empty');
   assert.ok(calls.some(x=>x.length===5)&&calls.some(x=>x.length===4),'both bounded tiers are queried');
-  const limits=[];
-  const full40=Array.from({length:40},(_,i)=>({id:'s'+i,data:()=>({lat:25.76,lng:-80.19,available:true})}));
-  const db2={collection:()=>({where:()=>({orderBy:()=>({startAt:()=>({endAt:()=>({limit:(n)=>({get:async()=>{limits.push(n);return {docs:n===40?full40:full40};}})})})})})})};
-  await G.nearbyOperatorCandidates(db2,{lat:25.7617,lng:-80.1918});
-  assert.ok(limits.includes(40)&&limits.includes(120),'a saturated prefix escalates once to the bounded saturation ceiling');
+  const limits=[], offsets=[];
+  // A saturated geohash cell contains 120 distinct Operators; the second page
+  // must begin AFTER the first 40 even if every document shares the same geohash.
+  const all=Array.from({length:120},(_,i)=>({id:'s'+i,data:()=>({lat:25.76,lng:-80.19,available:true})}));
+  const db2={collection:()=>({where:()=>({orderBy:()=>({startAt:()=>({endAt:()=>({
+    limit(n){limits.push(n);return {get:async()=>({docs:all.slice(0,n)})};},
+    startAfter(doc){offsets.push(doc.id);return {limit(n){limits.push(n);return {get:async()=>({docs:all.slice(all.findIndex(x=>x.id===doc.id)+1,all.findIndex(x=>x.id===doc.id)+1+n)})};}};},
+  })})})})})};
+  const saturated=await G.nearbyOperatorCandidates(db2,{lat:25.7617,lng:-80.1918});
+  assert.ok(limits.includes(40)&&limits.includes(80),'saturated cell fetches 40 + 80 nonoverlapping records');
+  assert.ok(!limits.includes(120),'overlapping second page would double-charge first 40');
+  assert.ok(offsets.length>0&&offsets.every(id=>id==='s39'),'second page starts after first page');
+  assert.equal(saturated.length,120,'preserves all 120 distinct candidate identities');
   console.log('all bounded-geographic dispatch tests passed');
 })().catch(e=>{console.error(e);process.exit(1);});

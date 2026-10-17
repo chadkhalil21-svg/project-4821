@@ -47,15 +47,19 @@ function prefixes(point,tier){
 async function queryTier(db,point,tier,{excludeIds=new Set(),limitPerPrefix=PER_PREFIX_LIMIT,saturationLimit=SATURATION_LIMIT}={}){
   const out=new Map();
   await Promise.all(prefixes(point,tier).map(async prefix=>{
-    let snap=await db.collection('operators').where('available','==',true)
-      .orderBy('geohash').startAt(prefix).endAt(prefix+'\uf8ff').limit(limitPerPrefix).get();
-    // A full prefix page is ambiguous: there may be more Operators hidden behind the
-    // lexicographic cutoff. Escalate only that saturated cell, still to a hard ceiling.
-    if(snap.docs.length===limitPerPrefix && saturationLimit>limitPerPrefix){
-      snap=await db.collection('operators').where('available','==',true)
-        .orderBy('geohash').startAt(prefix).endAt(prefix+'\uf8ff').limit(saturationLimit).get();
+    const base=db.collection('operators').where('available','==',true)
+      .orderBy('geohash').startAt(prefix).endAt(prefix+'\uf8ff');
+    const first=await base.limit(limitPerPrefix).get();
+    // A saturated cell must retain the first page and fetch only the NEXT records.
+    // Re-running a larger overlapping query billed the first 40 documents twice.
+    // Snapshot cursors preserve ties when many Operators share the same geohash.
+    const docs=[...first.docs];
+    if(first.docs.length===limitPerPrefix && saturationLimit>limitPerPrefix){
+      const last=first.docs[first.docs.length-1];
+      const next=await base.startAfter(last).limit(saturationLimit-limitPerPrefix).get();
+      docs.push(...next.docs);
     }
-    for(const d of snap.docs){
+    for(const d of docs){
       if(excludeIds.has(String(d.id)))continue;
       const x={id:d.id,...d.data()};
       if(Number.isFinite(Number(x.lat))&&Number.isFinite(Number(x.lng)))out.set(String(d.id),x);
